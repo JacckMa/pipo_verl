@@ -40,7 +40,7 @@ pip install --no-deps -e .
 ### Method 2: Conda
 
 ```bash
-conda create --name pirl python=3.10
+conda create --name pirl python=3.12
 conda activate pirL
 pip install -r requirements.txt
 pip install -e .
