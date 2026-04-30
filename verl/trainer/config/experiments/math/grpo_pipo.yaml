@@ -1,0 +1,101 @@
+# @package _global_
+
+defaults:
+  - /ppo_trainer
+  - _self_
+
+experiment:
+  name: GRPO+PIPO
+  tags: [grpo, math, pipo]
+  description: "GRPO+PIPO training on MATH dataset"
+
+algorithm:
+  adv_estimator: grpo
+  use_kl_in_reward: False
+  # PIPO Mechanism
+  layback:
+    enable: true
+    history_window_size: 8
+    min_steps_before_layback: 8
+    loss_scale_neg: 0.1    
+
+data:
+  train_files: ./dataset/math/train.parquet
+  val_files:
+    - ./dataset/HuggingFaceH4_MATH-500/test.parquet
+    - ./dataset/math-ai_amc23/test.parquet
+    - ./dataset/math-ai_aime25/test.parquet
+    - ./dataset/knoveleng_Minerva-Math/test.parquet
+    - ./dataset/olympiad_math/test.parquet
+  train_batch_size: 128
+  max_prompt_length: 512
+  max_response_length: 4096
+  filter_overlong_prompts: True
+  truncation: 'error'
+  shuffle: false
+
+actor_rollout_ref:
+  model:
+    # TODO: change to your model path
+    path: /your_model_dir/models/Qwen-4B
+    use_shm: False
+    use_remove_padding: True
+    enable_gradient_checkpointing: True
+  
+  actor:
+    optim:
+      lr: 1e-6
+    ppo_mini_batch_size: 64
+    ppo_micro_batch_size_per_gpu: 8
+    use_kl_loss: True
+    kl_loss_coef: 0.001
+    kl_loss_type: low_var_kl
+    entropy_coeff: 0
+    fsdp_config:
+      param_offload: True
+      optimizer_offload: True
+    checkpoint:
+      save_contents: ['model']
+  
+  rollout:
+    name: vllm
+    log_prob_micro_batch_size_per_gpu: 8
+    tensor_model_parallel_size: 1
+    gpu_memory_utilization: 0.6
+    n: 8
+    load_format: safetensors
+    layered_summon: True
+    temperature: 0.7
+    top_p: 0.95
+    do_sample: True
+
+    val_kwargs:
+      n: 1
+      do_sample: true
+      temperature: 0.7
+      top_p: 1
+  
+  ref:
+    log_prob_micro_batch_size_per_gpu: 8
+    fsdp_config:
+      param_offload: True
+
+trainer:
+  project_name: PIPO-MATH
+  experiment_name: ${experiment.name}
+  logger: ['console', 'wandb']
+  n_gpus_per_node: 8
+  nnodes: 1
+  save_freq: 50
+  test_freq: 10
+  val_before_train: true
+  total_epochs: 3
+  critic_warmup: 0
+  # TODO: change to your checkpoint dir
+  default_local_dir: /your_checkpoint_dir/${trainer.project_name}/${trainer.experiment_name}
+
+hydra:
+  run:
+    dir: logs/${now:%Y-%m-%d_%H%M%S}_${experiment.name}
+  job:
+    chdir: False
