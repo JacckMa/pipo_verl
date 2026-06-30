@@ -1,0 +1,207 @@
+# Copyright 2024 Bytedance Ltd. and/or its affiliates
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# from . import gsm8k, math, prime_math, prime_code
+
+import os
+
+from verl.utils.import_utils import deprecated
+
+
+def default_compute_score(
+    data_source,
+    solution_str,
+    ground_truth,
+    extra_info=None,
+    sandbox_fusion_url=None,
+    concurrent_semaphore=None,
+    memory_limit_mb=None,
+):
+    """Compute the score for a given solution based on the data source.
+
+    Args:
+        data_source (str): The source dataset identifier which determines the scoring method.
+        solution_str (str): The solution string to be evaluated.
+        ground_truth (str): The ground truth answer for comparison.
+        extra_info (dict, optional): Additional information that might be needed for scoring. Defaults to None.
+
+    Returns:
+        float: The computed score as a floating point number. If the result is a dictionary,
+               it returns the dictionary instead.
+
+    Raises:
+        NotImplementedError: If the reward function is not implemented for the given data source.
+    """
+    if data_source == "openai/gsm8k":
+        from . import gsm8k
+
+        res = gsm8k.compute_score(solution_str, ground_truth)
+    elif data_source in ["lighteval/MATH", "DigitalLearningGmbH/MATH-lighteval", "HuggingFaceH4/MATH-500"]:
+        from . import math_reward
+
+        res = math_reward.compute_score(solution_str, ground_truth)
+        # [Optional] Math-Verify Integration
+        # For enhanced accuracy, consider utilizing Math-Verify (https://github.com/huggingface/Math-Verify).
+        # Note: Math-Verify needs to be manually installed via pip: `pip install math-verify`.
+        # To use it, override the `compute_score` function with the following implementation:
+
+        # from . import math_verify
+        # res = math_verify.compute_score(solution_str, ground_truth)
+    elif data_source == "math_dapo" or data_source.startswith("aime"):
+        from . import math_dapo
+
+        res = math_dapo.compute_score(solution_str, ground_truth)
+    elif data_source == "Minerva" or data_source.startswith("knoveleng/Minerva"):
+        # Minerva uses long-form solutions ending with \boxed{answer} or "Answer: xxx"
+        # math_dapo's normalize_final_answer + Answer pattern extraction handles it correctly
+        from . import latex_math
+
+        res = latex_math.compute_score(solution_str, ground_truth)
+    elif data_source == "Olympiad" or "OlympiadBench" in data_source:
+        # OlympiadBench contains competition math with complex LaTeX answers
+        # math_dapo's normalize_final_answer is more robust than math_reward's strip_string
+        from . import latex_math
+
+        res = latex_math.compute_score(solution_str, ground_truth)
+    elif data_source in [
+        "numina_aops_forum",
+        "numina_synthetic_math",
+        "numina_amc_aime",
+        "numina_synthetic_amc",
+        "numina_cn_k12",
+        "numina_olympiads",
+    ]:
+        # prime_math.py is missing; fall back to math_dapo which uses
+        # normalize_final_answer and supports Answer:/boxed extraction
+        from . import math_dapo
+
+        res = math_dapo.compute_score(solution_str, ground_truth)
+    elif data_source in [
+        "codecontests",
+        "apps",
+        "codeforces",
+        "taco",
+        "lcb",
+        "lcb_v6",
+        "livecodebench",
+        "LiveCodeBench",
+        "humaneval",
+        "humanevalplus",
+        "HumanEvalPlus",
+        "mbpp",
+        "mbppplus",
+        "MBPPPlus",
+    ]:
+        # Use the passed sandbox_fusion_url if available
+        if sandbox_fusion_url:
+            from . import sandbox_fusion
+
+            # TACO can contain hundreds of tests per problem; sample only during TACO training reward.
+            case_sample_size = 0
+            case_sample_mode = "hardest"
+            if data_source == "taco":
+                case_sample_size = int(os.environ.get("HACPO_TACO_REWARD_MAX_CASES", "0") or 0)
+                case_sample_mode = os.environ.get("HACPO_TACO_REWARD_CASE_SELECTION", "hardest")
+            res = sandbox_fusion.compute_score(
+                sandbox_fusion_url,
+                concurrent_semaphore,
+                memory_limit_mb,
+                solution_str,
+                ground_truth,
+                continuous=True,
+                case_sample_size=case_sample_size,
+                case_sample_mode=case_sample_mode,
+            )
+        else:
+            # If no sandbox URL is provided, fall back to prime_code or raise error
+            from . import prime_code
+
+            # Assuming prime_code doesn't need the URL
+            res = prime_code.compute_score(solution_str, ground_truth, continuous=True)
+    elif data_source in ["gpqa", "gpqa-diamond"]:
+        from . import gpqa
+
+        res = gpqa.compute_score(solution_str, ground_truth)
+    elif data_source == "ifeval":
+        from . import ifeval
+
+        res = ifeval.compute_score(solution_str, ground_truth)
+
+    elif data_source in ["hiyouga/geometry3k"]:
+        from . import geo3k
+
+        res = geo3k.compute_score(solution_str, ground_truth)
+    elif data_source in [
+        "searchR1_nq",
+        "searchR1_triviaqa",
+        "searchR1_popqa",
+        "searchR1_hotpotqa",
+        "searchR1_2wikimultihopqa",
+        "searchR1_musique",
+        "searchR1_bamboogle",
+    ]:
+        from . import search_r1_like_qa_em
+
+        res = search_r1_like_qa_em.compute_score(solution_str, ground_truth)
+    elif data_source in [
+        "sciknoweval_biology",
+        "sciknoweval_chemistry",
+        "sciknoweval_material",
+        "sciknoweval_physics",
+    ]:
+        from . import mcq
+
+        res = mcq.compute_score(solution_str, ground_truth)
+
+    elif data_source in ["tooluse", "rlla", "bfcl"] or str(data_source).startswith("bfcl"):
+        from . import tool_call
+
+        res = tool_call.compute_score(solution_str, ground_truth)
+    elif data_source == "apibank":
+        from . import apibank
+
+        res = apibank.compute_score(solution_str, ground_truth)
+
+    else:
+        # Default fallback: treat unknown data sources as math problems
+        from . import math_reward
+
+        res = math_reward.compute_score(solution_str, ground_truth)
+
+    if isinstance(res, dict):
+        return res
+    elif isinstance(res, int | float | bool):
+        return float(res)
+    else:
+        return float(res[0])
+
+
+@deprecated("verl.utils.reward_score.default_compute_score")
+def _default_compute_score(
+    data_source,
+    solution_str,
+    ground_truth,
+    extra_info=None,
+    sandbox_fusion_url=None,
+    concurrent_semaphore=None,
+    memory_limit_mb=None,
+):
+    """
+    Legacy function API to be deprecated. Please use `default_compute_score` instead.
+    """
+    return default_compute_score(
+        data_source, solution_str, ground_truth, extra_info, sandbox_fusion_url, concurrent_semaphore, memory_limit_mb
+    )
+
+
+__all__ = ["default_compute_score"]
